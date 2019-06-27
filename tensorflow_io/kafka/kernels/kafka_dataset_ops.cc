@@ -49,7 +49,25 @@ class KafkaDatasetOp : public DatasetOpKernel {
     OP_REQUIRES(ctx, (timeout > 0),
                 errors::InvalidArgument(
                     "Timeout value should be large than 0, got ", timeout));
-    *output = new Dataset(ctx, std::move(topics), servers, group, eof, timeout);
+
+    const Tensor* global_cfg_tensor;
+    OP_REQUIRES_OK(ctx, ctx->input("global_cfg", &global_cfg_tensor));
+    std::vector<string> global_cfg;
+    global_cfg.reserve(global_cfg_tensor->NumElements());
+    for (int i = 0; i < global_cfg_tensor->NumElements(); ++i) {
+      global_cfg.push_back(global_cfg_tensor->flat<string>()(i));
+    }
+
+    const Tensor* topic_cfg_tensor;
+    OP_REQUIRES_OK(ctx, ctx->input("topic_cfg", &topic_cfg_tensor));
+    std::vector<string> topic_cfg;
+    topic_cfg.reserve(topic_cfg_tensor->NumElements());
+    for (int i = 0; i < topic_cfg_tensor->NumElements(); ++i) {
+      topic_cfg.push_back(topic_cfg_tensor->flat<string>()(i));
+    }
+
+    *output = new Dataset(ctx, std::move(topics), servers, group, eof, 
+                          timeout, std::move(global_cfg), std::move(topic_cfg));
   }
 
  private:
@@ -57,13 +75,16 @@ class KafkaDatasetOp : public DatasetOpKernel {
    public:
     Dataset(OpKernelContext* ctx, std::vector<string> topics,
             const string& servers, const string& group, const bool eof,
-            const int64 timeout)
+            const int64 timeout, std::vector<string> topics,
+            std::vector<string> topics)
         : DatasetBase(DatasetContext(ctx)),
           topics_(std::move(topics)),
           servers_(servers),
           group_(group),
           eof_(eof),
-          timeout_(timeout) {}
+          timeout_(timeout),
+          global_cfg_(std::move(global_cfg)),
+          topic_cfg_(std::move(topic_cfg)) {}
 
     std::unique_ptr<IteratorBase> MakeIteratorInternal(
         const string& prefix) const override {
@@ -98,8 +119,13 @@ class KafkaDatasetOp : public DatasetOpKernel {
       TF_RETURN_IF_ERROR(b->AddScalar(eof_, &eof));
       Node* timeout = nullptr;
       TF_RETURN_IF_ERROR(b->AddScalar(timeout_, &timeout));
+      Node* global_cfg = nullptr;
+      TF_RETURN_IF_ERROR(b->AddVector(global_cfg_, &global_cfg));
+      Node* topics_cfg = nullptr;
+      TF_RETURN_IF_ERROR(b->AddVector(topics_cfg_, &topics_cfg));
       TF_RETURN_IF_ERROR(
-          b->AddDataset(this, {topics, servers, group, eof, timeout}, output));
+          b->AddDataset(this, {topics, servers, group, eof,
+                        timeout, global_cfg, topics_cfg}, output));
       return Status::OK();
     }
 
@@ -143,11 +169,13 @@ class KafkaDatasetOp : public DatasetOpKernel {
 
                   if (dataset()->eof_) break;
               }
-              else {
-                  if (message->err() != RdKafka::ERR__TIMED_OUT) {
-                      return errors::Internal("Failed to consume:",
-                                        message->errstr());
-                  }
+              else if (message->err() == RdKafka::ERR__TRANSPORT) {
+                  LOG(ERROR) << "Broker transport failure: " << message->errstr();
+              }
+              else if (message->err() != RdKafka::ERR__TIMED_OUT) {
+                  LOG(ERROR) << "Failed to consume: " << message->errstr();
+                  return errors::Internal("Failed to consume: ",
+                                          message->errstr());
               }
 
               message.reset(nullptr);
@@ -335,6 +363,8 @@ class KafkaDatasetOp : public DatasetOpKernel {
     const std::string group_;
     const bool eof_;
     const int64 timeout_;
+    const std::vector<string> global_cfg_;
+    const std::vector<string> topic_cfg_;
   };
 };
 

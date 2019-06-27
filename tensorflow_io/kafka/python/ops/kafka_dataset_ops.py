@@ -32,7 +32,9 @@ class KafkaDataset(data.Dataset):
                servers="localhost",
                group="",
                eof=False,
-               timeout=1000):
+               timeout=1000,
+               global_cfg="",
+               topic_cfg=""):
     """Create a KafkaReader.
 
     Args:
@@ -44,6 +46,12 @@ class KafkaDataset(data.Dataset):
       eof: If True, the kafka reader will stop on EOF.
       timeout: The timeout value for the Kafka Consumer to wait
                (in millisecond).
+      global_cfg: A list of global configuration properties in Key=Value format,
+                  eg. ["enable.auto.commit=false", "auto.commit.interval.ms=10000"],
+                  please refer to 'Global configuration properties' in librdkafka doc.
+      topic_cfg: A list of topic configuration properties in Key=Value format,
+                 eg. ["auto.offset.reset=earliest", "compression.codec=gzip"],
+                 please refer to 'Topic configuration properties' in librdkafka doc.
     """
     self._topics = tensorflow.convert_to_tensor(
         topics, dtype=dtypes.string, name="topics")
@@ -54,6 +62,10 @@ class KafkaDataset(data.Dataset):
     self._eof = tensorflow.convert_to_tensor(eof, dtype=dtypes.bool, name="eof")
     self._timeout = tensorflow.convert_to_tensor(
         timeout, dtype=dtypes.int64, name="timeout")
+    self._global_cfg = tensorflow.convert_to_tensor(
+        global_cfg, dtype=dtypes.string, name="global_cfg")
+    self._topic_cfg = tensorflow.convert_to_tensor(
+        topic_cfg, dtype=dtypes.string, name="topic_cfg")
     super(KafkaDataset, self).__init__()
 
   def _inputs(self):
@@ -61,7 +73,8 @@ class KafkaDataset(data.Dataset):
 
   def _as_variant_tensor(self):
     return kafka_ops.kafka_dataset(self._topics, self._servers,
-                                   self._group, self._eof, self._timeout)
+                                   self._group, self._eof, self._timeout,
+                                   self._global_cfg, self._topic_cfg)
 
   @property
   def output_classes(self):
